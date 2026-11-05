@@ -23947,14 +23947,53 @@ var Atlas3D = (function () {
 
   /* ---------- animation ---------- */
   function easeIO(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+  // minimum-jerk profile (Flash & Hogan): how people move a limb from rest to rest; gentler peak speed than a cubic ease
+  function minJerk(t) { return t * t * t * (10 + t * (-15 + 6 * t)); }
+  // blend several poses with weights (numbers combine linearly; other values come from the strongest of the middle pair)
+  function blendObj(ps, ws) {
+    var ref = null, i, k;
+    for (i = 0; i < ps.length; i++) if (ps[i] != null) { ref = ps[i]; break; }
+    if (ref == null) return ref;
+    if (typeof ref === 'number') { var v = 0, base = ps[1] != null ? ps[1] : ref; for (i = 0; i < ps.length; i++) v += ws[i] * (typeof ps[i] === 'number' ? ps[i] : base); return v; }
+    if (typeof ref !== 'object') return ws[2] > ws[1] ? (ps[2] != null ? ps[2] : ps[1]) : (ps[1] != null ? ps[1] : ps[2]);
+    if (Array.isArray(ref)) { var n = ref.length, out = []; for (k = 0; k < n; k++) out.push(blendObj(ps.map(function (p) { return p && p[k]; }), ws)); return out; }
+    var o = {}, keys = {}; ps.forEach(function (p) { if (p) for (k in p) keys[k] = 1; });
+    for (k in keys) o[k] = blendObj(ps.map(function (p) { return p ? p[k] : undefined; }), ws);
+    return o;
+  }
+  // Catmull-Rom through key poses: velocity carries through intermediate keys instead of stopping at each one
+  function crPose(p0, p1, p2, p3, t) {
+    var t2 = t * t, t3 = t2 * t;
+    return blendObj([p0, p1, p2, p3], [(-t3 + 2 * t2 - t) / 2, (3 * t3 - 5 * t2 + 2) / 2, (-3 * t3 + 4 * t2 + t) / 2, (t3 - t2) / 2]);
+  }
+  // consecutive moving segments form one continuous movement (a "chain"); holds break chains
+  function buildChains(a) {
+    var seg = a.seq, chains = [], cur = null, acc = 0, cyc = !seg.some(function (s) { return s.hold; });
+    seg.forEach(function (s, i) {
+      s.t0 = acc; acc += s.d;
+      if (s.hold || s.from === s.to) { cur = null; s.chain = null; return; }
+      if (!cur || seg[i - 1].to !== s.from) { cur = { segs: [], t0: s.t0, d: 0, lin: true }; chains.push(cur); }
+      cur.segs.push(i); cur.d += s.d; if (s.ease !== 'lin') cur.lin = false; s.chain = cur;
+    });
+    // a sequence with no holds that returns to its start loops seamlessly: no easing at the loop point
+    if (cyc && chains.length === 1 && seg.length > 1 && seg[seg.length - 1].to === seg[0].from) { chains[0].loop = true; chains[0].lin = true; }
+    a.chains = chains;
+  }
   function animSample(anim, time) {
     var seg = anim.seq, total = anim.total, t = time % total, acc = 0;
+    if (!anim.chains) buildChains(anim);
     for (var i = 0; i < seg.length; i++) {
       var s = seg[i];
       if (t <= acc + s.d || i === seg.length - 1) {
-        var u = s.d ? Math.min(1, (t - acc) / s.d) : 1;
-        var e = s.hold ? 0 : (s.ease === 'lin' ? u : easeIO(u));
-        return { pose: s.hold ? anim.keys[s.from] : lerpObj(anim.keys[s.from], anim.keys[s.to], e), phase: s.phase, inten: s.inten, u: t / total };
+        var u = s.d ? Math.min(1, (t - acc) / s.d) : 1, ch = s.chain;
+        if (s.hold || !ch) return { pose: s.hold ? anim.keys[s.from] : lerpObj(anim.keys[s.from], anim.keys[s.to], minJerk(u)), phase: s.phase, inten: s.inten, u: t / total };
+        if (ch.segs.length === 1) { var e = ch.lin ? u : minJerk(u); return { pose: lerpObj(anim.keys[s.from], anim.keys[s.to], e), phase: s.phase, inten: s.inten, u: t / total }; }
+        // whole chain moves on one smooth time profile; position along it is split by segment duration
+        var cu = Math.min(1, (t - ch.t0) / ch.d), ce = ch.lin ? cu : minJerk(cu), ct = ce * ch.d, j, sj = s, uj = u;
+        for (j = 0; j < ch.segs.length; j++) { sj = seg[ch.segs[j]]; if (ct <= sj.t0 - ch.t0 + sj.d || j === ch.segs.length - 1) { uj = Math.max(0, Math.min(1, (ct - (sj.t0 - ch.t0)) / sj.d)); break; } }
+        var pi = ch.segs[j], prev = j > 0 ? seg[ch.segs[j - 1]] : (ch.loop ? seg[ch.segs[ch.segs.length - 1]] : null), next = j < ch.segs.length - 1 ? seg[ch.segs[j + 1]] : (ch.loop ? seg[ch.segs[0]] : null);
+        var k1 = anim.keys[sj.from], k2 = anim.keys[sj.to], k0 = prev ? anim.keys[prev.from] : k1, k3 = next ? anim.keys[next.to] : k2;
+        return { pose: crPose(k0, k1, k2, k3, uj), phase: sj.phase, inten: sj.inten, u: t / total };
       }
       acc += s.d;
     }
@@ -23970,6 +24009,7 @@ var Atlas3D = (function () {
       a.seq = [{ from: 0, to: 0, d: h2, hold: 1, phase: 'Set', inten: 0.35 }, { from: 0, to: 1, d: dn, phase: ph[0], inten: a.int0 == null ? 0.7 : a.int0 }, { from: 1, to: 1, d: h1, hold: 1, phase: a.holdName || 'Bottom', inten: a.intH == null ? 0.85 : a.intH }, { from: 1, to: 0, d: up, phase: ph[1], inten: a.int1 == null ? 1 : a.int1 }];
     }
     a.total = a.seq.reduce(function (s, x) { return s + x.d; }, 0);
+    a.chains = null;
     return a;
   }
   function mergePose(base, k) {
@@ -25355,7 +25395,7 @@ var EX_ANIM = (function () {
   function xarms(k) { var a = XARMS(); k.ik.armL = a.armL; k.ik.armR = a.armR; return k; }
 
   /* ---- barbell back squats: bar on the upper traps (just below C7), forearms ~vertical under it, bar over mid-foot ---- */
-  var BACK_T = [0.24, 0.16, -0.133], BACK_O = { pole: [0.25, -1, -0.4], pro: 0 };   // wrist (thorax) → bar sits at thorax [0, 0.245, -0.105]
+  var BACK_T = [0.30, 0.20, -0.12], BACK_O = { pole: [0.6, -1, -0.5], pro: 0 };   // grip ~1.5× shoulder width, elbows down and slightly back under the bar (not flared forward)
   function backSq(o, hipTopZ, shT, shB) {
     var s = K.sq(o);
     setArms(s.A, BACK_T, BACK_O); setArms(s.B, BACK_T, BACK_O);
@@ -25368,7 +25408,7 @@ var EX_ANIM = (function () {
   A.boxSquat = { keys: [s.A, s.B], props: [BAR, { type: 'box', p: [0, 0.225, -0.36], size: [0.42, 0.45, 0.36] }], cam: K.SIDE, hold1: 0.7, holdName: 'Sit on box · stay tight' };
 
   /* ---- front squat: clean-grip front rack — bar on the front delts against the throat, wrists extended, elbows high & forward ---- */
-  var FR = function () { return K.arms('thorax', [0.21, 0.196, 0.18], { pole: [0.3, 0.1, 1], pro: 0, end: [-73, 0, 180], ef: 'thorax' }); };
+  var FR = function () { return K.arms('thorax', [0.20, 0.32, 0.09], { pole: [0.25, -0.3, 1], pro: 0, end: [-73, 0, 180], ef: 'thorax' }); };   // bar on the front delts at collarbone height, elbows forward (not up by the face)
   s = K.sq({ hold: 'front', hipBot: [0.42, -0.14], look: 6 });
   [s.A, s.B].forEach(function (k) { var a = FR(); k.ik.armL = a.armL; k.ik.armR = a.armR; });
   s.A.hinge = { hip: [0.9, 0.0], sh: -0.032 }; s.B.hinge.sh = -0.05;
