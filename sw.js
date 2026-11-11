@@ -1,5 +1,5 @@
 /* Maxamum: offline cache. The whole app is one file, so after the first visit it opens without a connection. */
-const CACHE = 'maximum-32158add12';
+const CACHE = 'maximum-70d029168b';
 const CORE = ['./', './index.html', './body-1.bin', './body-2.bin', './body-3.bin', './body-4.bin', './manifest.webmanifest', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-192.png', './icons/icon-maskable-512.png', './icons/icon-32.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('maximum-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
