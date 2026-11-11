@@ -28848,7 +28848,7 @@ var HeartView = (function () {
       kinds.map(function (k) {
         return '<div class="lm-grp"><h5><i class="lmdot k-' + k[0] + '"></i>' + esc(k[1]) + '</h5><div class="lm-chips">' +
           lmCur.map(function (l, i) { return l.kind === k[0] ? '<button class="lmchip k-' + l.kind + (S.lm === i ? ' on' : '') + '" data-lm="' + i + '"><i class="lmdot k-' + l.kind + '"></i>' + esc(l.name) + '</button>' : ''; }).join('') + '</div></div>';
-      }).join('') + '<p class="lm-src">Landmarks and attachments checked against Gray’s Anatomy (42nd ed.), StatPearls (NCBI) and TeachMeAnatomy.</p></div>';
+      }).join('') + '<p class="lm-src">Landmarks and attachments based on Gray’s Anatomy (42nd ed.), StatPearls (NCBI) and TeachMeAnatomy.</p></div>';
   }
   function lmDetail(i) {
     var l = lmCur && lmCur[i];
